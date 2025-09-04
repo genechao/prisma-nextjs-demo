@@ -1,0 +1,220 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Prisma `@relation` lines:
+// - `@relation(...)` lines do NOT create additional columns in the database.
+//   They are used by the Prisma schema to describe how models are connected so
+//   the Prisma Client can load related rows and generate correct TypeScript types.
+// - `fields: [fkField]` and `references: [pkField]` tell Prisma which column on
+//   the current model stores the foreign key and which column on the referenced
+//   model is the primary key. This maps the Prisma relation to the existing SQL
+//   foreign-key column (e.g., itemTypeId -> item_type.id).
+// - Giving a relation an explicit name (first string argument) links the two
+//   sides of the relation (the singular and the array). Names are required when
+//   a model has multiple relations to the same target model or for self-relations.
+//   In this schema we name relations where helpful (e.g.,
+//   `ItemTypeToItem`, `ItemToLoan`, `ItemToCategory`) so their intent is clear.
+// - `onDelete` / `onUpdate` in Prisma mirror the SQL referential actions
+//   (ON DELETE / ON UPDATE). They describe behavior but the authoritative
+//   enforcement happens in the database; keep them consistent with your SQL.
+// - Array fields (e.g., `children Category[]`) are the inverse side. They do
+//   not correspond to a DB column; they let Prisma fetch the related rows.
+// - Use `@map` / `@@map` to keep ergonomic model/field names in code while
+//   preserving exact SQL table/column names. When you run `prisma db pull`, the
+//   introspector reads the DB metadata; manual `@relation` edits help Prisma
+//   generate nicer client-side relations without changing the DB.
+
+// Lookup tables: `Category` and `ItemType`
+// - These models act as lookup/reference tables that store controlled vocabularies
+//   and optional metadata (e.g., display name, slug). Lookup tables are the
+//   idiomatic default in Prisma when the set of values is dynamic or managed by
+//   an admin UI.
+//
+// Alternatives and trade-offs:
+// - Prisma enum / PostgreSQL enum:
+//   - Use when the set of values is small and very stable.
+//   - Pros: strong compile-time type-safety in the Prisma Client, compact
+//     storage and simple queries.
+//   - Cons: changing values requires a migration; PG enums are awkward to
+//     remove/rename and can cause migration complexity or locking. Not suitable
+//     for admin-editable or tenant-specific vocabularies.
+//
+// - Text column with CHECK constraint:
+//   - Keeps values human-readable without FK constraints.
+//   - Pros: simple to implement.
+//   - Cons: no referential integrity, no metadata, and still needs schema changes
+//     or SQL changes to add values. Rarely worth it compared to lookup tables.
+//
+// - JSONB or text arrays (e.g., tags/categories as arrays):
+//   - Very flexible; good for schemaless tags.
+//   - Pros: no migrations for new values; free-form.
+//   - Cons: no referential integrity, harder to dedupe/query/join, and can drift
+//     in larger systems. Use only when you intentionally accept schemaless data.
+//
+// - Polymorphic / subtype tables (table-per-type):
+//   - Create per-type tables for structured attributes when different types
+//     require different columns (e.g., `BookDetails`, `VideoDetails`).
+//   - Pros: strong DB-level typing, indexable fields per subtype, efficient
+//     queries for subtype attributes.
+//   - Cons: more complex schema and joins; more boilerplate for demos.
+
+model Category {
+  id               Int              @id @default(autoincrement()) @map("id")
+  parentId         Int?             @map("parent_id")
+  code             String           @unique @map("code")
+  name             String           @map("name")
+
+  // Self-relation (parent/children) explained:
+  // - In Prisma we expose an ergonomic field `parent` that points to another
+  //   `Category` row; the `fields: [parentId]` and `references: [id]` tell Prisma
+  //   which column stores the foreign key and which column on the referenced
+  //   model is the primary key.
+  // - The relation is given an explicit name (`CategoryToCategory`) so Prisma
+  //   can link the two sides (the singular `parent` and the array `children`).
+  // - `children` is the inverse side (an array);
+  //   it lets you load all child categories from the parent in Prisma queries.
+  parent           Category?        @relation("CategoryToCategory", fields: [parentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  children         Category[]       @relation("CategoryToCategory")
+
+  // Implicit many-to-many (Prisma-managed):
+  // - Use `items Item[]` on Category and `categories Category[]` on Item.
+  // - Give the relation an explicit name (first string argument) to link the two
+  //   sides of the relation (e.g., `@relation("ItemToCategory")`). This is optional
+  //   for simple implicit many-to-many relations and makes the relation's intent
+  //   clear in the schema and generated client types.
+  // - Prisma will create and manage the join table automatically.
+  // - Examples for common operations with an implicit M2M:
+  //
+  //   1) Connect an existing Category to an Item (nested write from Item side):
+  //
+  //     const itemWithNewCategory = await prisma.item.update({
+  //       where: { id: 1 },
+  //       data: { categories: { connect: { id: 2 } } },
+  //       include: { categories: true }
+  //     })
+  //
+  //   2) Create an Item and link it to existing Categories in the same write:
+  //
+  //     const newItem = await prisma.item.create({
+  //       data: {
+  //         title: 'New Item',
+  //         itemType: { connect: { id: 1 } },
+  //         categories: { connect: [{ id: 2 }, { id: 3 }] }
+  //       }
+  //     })
+  //
+  //   3) Remove a link between an Item and a Category (disconnect):
+  //
+  //     await prisma.item.update({
+  //       where: { id: 1 },
+  //       data: { categories: { disconnect: { id: 2 } } }
+  //     })
+  //
+  // `items` is the implicit many-to-many with Item (Prisma-managed join table)
+  items            Item[]           @relation("ItemToCategory")
+
+  @@map("category")
+}
+
+model ItemType {
+  id    Int    @id @default(autoincrement()) @map("id")
+  code  String @unique @map("code")
+  name  String @map("name")
+
+  items Item[] @relation("ItemTypeToItem")
+
+  @@map("item_type")
+}
+
+model Item {
+  id               Int               @id @default(autoincrement()) @map("id")
+  itemTypeId       Int               @map("item_type_id")
+  currentLoanId    Int?              @unique @map("current_loan_id")
+
+  title            String            @map("title")
+  requestedBy      String?           @map("requested_by")
+  metadata         Json?             @map("metadata")
+  createdAt        DateTime          @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt        DateTime          @default(now()) @updatedAt @db.Timestamptz(6) @map("updated_at")
+
+  itemType         ItemType          @relation("ItemTypeToItem", fields: [itemTypeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  loans            Loan[]            @relation("ItemToLoan")
+  // `categories` is the implicit many-to-many with Category (Prisma-managed join table)
+  categories       Category[]        @relation("ItemToCategory")
+
+  currentLoan      Loan?             @relation("ItemCurrentLoan", fields: [currentLoanId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("item")
+}
+
+// Example for creating a Loan and atomically setting Item.currentLoanId
+// (run inside a Prisma transaction to preserve atomicity and avoid races):
+//
+// const result = await prisma.$transaction(async (tx) => {
+//   // 1. Create the loan record (history)
+//   const loan = await tx.loan.create({
+//     data: { itemId, patronName, /* checkoutDate, etc. */ }
+//   })
+//
+//   // 2. Atomically set the Item.currentLoanId only if it's currently null
+//   const updated = await tx.item.updateMany({
+//     where: { id: itemId, currentLoanId: null },
+//     data: { currentLoanId: loan.id },
+//   })
+//
+//   // 3. If no rows were updated, another client grabbed the item concurrently - rollback
+//   if (updated.count === 0) {
+//     throw new Error('Item already loaned')
+//   }
+//
+//   return loan
+// })
+//
+// For returning a loan: in a transaction, set loan.returnedAt and clear
+// Item.currentLoanId. Use `updateMany` with a `where` clause to ensure the
+// item's loan status hasn't changed, preventing race conditions.
+//
+// await prisma.$transaction(async (tx) => {
+//   // 1. Mark the historical loan record as returned
+//   await tx.loan.update({
+//     where: { id: loanId },
+//     data: { returnedAt: new Date() }
+//   })
+//
+//   // 2. Atomically clear the item's current loan ID only if it matches
+//   const updated = await tx.item.updateMany({
+//     where: { id: itemId, currentLoanId: loanId },
+//     data: { currentLoanId: null }
+//   })
+//
+//   // 3. If no rows were updated, the item's state changed - rollback
+//   if (updated.count === 0) {
+//     throw new Error('Failed to return item. It may have been returned already.')
+//   }
+// })
+
+model Loan {
+  id            Int      @id @default(autoincrement()) @map("id")
+  itemId        Int      @map("item_id")
+
+  patronName    String   @map("patron_name")
+  checkoutDate  DateTime @default(dbgenerated("CURRENT_DATE")) @db.Date @map("checkout_date")
+  returnedAt    DateTime? @db.Timestamptz(6) @map("returned_at")
+  createdAt     DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamptz(6) @map("updated_at")
+
+  item          Item     @relation("ItemToLoan", fields: [itemId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  itemCurrent   Item?    @relation("ItemCurrentLoan")
+
+  @@map("loan")
+}
